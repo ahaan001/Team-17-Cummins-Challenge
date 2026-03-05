@@ -1,10 +1,21 @@
 import { useState, useRef, useEffect } from "react";
 import { Orchestrator } from "./Orchestrator.js";
 import { classifyRisk, RISK_CATEGORIES } from "./RiskClassifier.js";
-
+import { 
+  initializeDatabase, 
+  startDiagnosticRun, 
+  endDiagnosticRun, 
+  logDecision, 
+  getRunLogs, 
+  getAllRuns 
+} from './database'
+import {CUMMINS_OFFLINE_KB_EXPANDED as CUMMINS_OFFLINE_KB} from "./ExpandedKBdatabase.js";
+import { searchKB } from "./agent_usage.js";
 // ─────────────────────────────────────────────────────────────────────────────
 // CUMMINS SYNTHETIC WAREHOUSE & PARTS DATABASE
 // ─────────────────────────────────────────────────────────────────────────────
+
+
 const CUMMINS_WAREHOUSE_DB = {
   warehouses: [
     { id: "CDW-001", name: "Cummins Distribution Hub — Columbus", city: "Columbus", state: "IN", phone: "+1-812-377-5000", distance: "8 mi", type: "Primary Distribution" },
@@ -86,130 +97,131 @@ const CUMMINS_WAREHOUSE_DB = {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CUMMINS OFFLINE KNOWLEDGE BASE (SPN/FMI Fault Codes)
+// DEPRECATED: Replaced by ExpandedKBdatabase.js — imported above as CUMMINS_OFFLINE_KB
 // ─────────────────────────────────────────────────────────────────────────────
-const CUMMINS_OFFLINE_KB = {
-  "SPN 651 FMI 5": {
-    issue: "Injector Cylinder #1 — Open Circuit",
-    engine: ["ISX15", "X15", "ISB6.7"],
-    causes: ["Injector solenoid open circuit", "Damaged wiring harness to injector", "Faulty ECM driver circuit", "Corroded injector connector", "Failed fuel injector"],
-    steps: [
-      "Connect INSITE diagnostic software and confirm fault is active",
-      "Perform injector cutout test — monitor RPM drop per cylinder",
-      "Measure injector solenoid resistance: nominal 0.5–2.0 ohms",
-      "Inspect injector harness connector for corrosion or damage",
-      "Check ECM pin voltage for injector #1 driver circuit",
-      "Replace injector if resistance is out of spec or solenoid fails",
-    ],
-    parts: ["Fuel Injector (ISX15)", "Fuel Injector (ISB6.7)"],
-    severity: "high",
-  },
-  "SPN 2791 FMI 7": {
-    issue: "EGR Valve — Mechanical Fault / Stuck",
-    engine: ["ISX15", "X15", "ISL9"],
-    causes: ["Carbon buildup jamming EGR valve", "Failed EGR actuator motor", "EGR cooler restriction", "Damaged valve seat", "Coolant contamination in EGR system"],
-    steps: [
-      "Use INSITE to command EGR valve through full range — observe actual vs commanded position",
-      "Remove EGR valve and inspect for carbon deposits and mechanical binding",
-      "Clean EGR valve and passages with approved carbon cleaner (Cummins #3824483)",
-      "Inspect EGR cooler for internal leaks or blockage — perform pressure test",
-      "Check EGR actuator motor resistance: nominal 8–15 ohms",
-      "Replace EGR valve if actuator fails or valve is mechanically damaged",
-    ],
-    parts: ["EGR Valve (ISX15)", "EGR Valve (ISL9)"],
-    severity: "high",
-  },
-  "SPN 3364 FMI 18": {
-    issue: "Aftertreatment DEF Dosing — Rate Below Normal",
-    engine: ["ISX15", "ISL9", "ISB6.7"],
-    causes: ["Clogged DEF dosing injector", "DEF quality below spec (contaminated)", "Low DEF tank level", "DEF pump pressure fault", "Frozen DEF supply line (cold weather)"],
-    steps: [
-      "Check DEF tank level — minimum 10% required for dosing",
-      "Test DEF quality using refractometer — urea concentration must be 31.8–33.2%",
-      "Perform DEF dosing injector purge cycle via INSITE",
-      "Inspect DEF supply line and strainer for blockage or ice",
-      "Check DEF pump output pressure: nominal 80–130 PSI",
-      "Replace DEF dosing injector if purge cycle fails to restore flow",
-    ],
-    parts: ["DEF Dosing Injector"],
-    severity: "medium",
-  },
-  "SPN 3251 FMI 0": {
-    issue: "DPF Differential Pressure — High (Soot Overloaded)",
-    engine: ["ISX15", "ISB6.7", "ISL9"],
-    causes: ["DPF soot accumulation above threshold", "Failed active regen due to low exhaust temp", "Restricted DPF pressure sensor port", "Short-haul duty cycle (insufficient regen temps)", "Oil consumption contaminating DPF"],
-    steps: [
-      "Check INSITE for soot load % — above 100% requires forced regen",
-      "Perform parked forced regeneration via INSITE (engine must reach >550°C DPF inlet)",
-      "Inspect DPF differential pressure sensor and ports for blockage",
-      "Review duty cycle — frequent short trips prevent passive regen",
-      "Check engine oil consumption — excessive blow-by contaminates DPF",
-      "If forced regen fails to reduce soot below 70%, remove DPF for cleaning or replacement",
-    ],
-    parts: ["DPF Pressure Sensor", "DPF Filter (ISX15)"],
-    severity: "critical",
-  },
-  "SPN 636 FMI 2": {
-    issue: "Crankshaft Position Sensor — Erratic Signal",
-    engine: ["ISX15", "ISB6.7", "ISL9", "ISC8.3"],
-    causes: ["Damaged or worn CKP sensor", "Crankshaft reluctor ring damage", "Air gap out of specification", "Wiring harness chafing near sensor", "Electromagnetic interference from accessories"],
-    steps: [
-      "Inspect CKP sensor and mounting for physical damage",
-      "Measure air gap between sensor and reluctor ring: nominal 0.5–1.5 mm",
-      "Check sensor output voltage with scope — look for missing or erratic pulses",
-      "Inspect wiring harness routing for chafing against engine block",
-      "Measure sensor resistance: nominal 900–1100 ohms for magnetic pickup type",
-      "Inspect reluctor ring for missing or damaged teeth",
-      "Replace CKP sensor and re-check air gap",
-    ],
-    parts: ["Crankshaft Position Sensor"],
-    severity: "high",
-  },
-  "SPN 641 FMI 5": {
-    issue: "Variable Geometry Turbocharger (VGT) Actuator — Open Circuit",
-    engine: ["ISX15", "X15"],
-    causes: ["Failed VGT actuator solenoid", "Open circuit in actuator wiring", "Corroded actuator connector", "ECM driver circuit fault", "Mechanical jam in VGT vanes"],
-    steps: [
-      "Use INSITE to command VGT actuator — observe actual vs commanded vane position",
-      "Measure actuator solenoid resistance: nominal 5–12 ohms",
-      "Inspect actuator wiring and connector for corrosion or damage",
-      "Perform VGT vane movement test — vanes should move freely through full range",
-      "Check for carbon buildup on VGT vanes — clean with approved solvent if needed",
-      "Replace turbocharger assembly if actuator or vane mechanism is mechanically failed",
-    ],
-    parts: ["Turbocharger (ISX15)"],
-    severity: "high",
-  },
-  "SPN 3216 FMI 18": {
-    issue: "NOx Sensor (Upstream) — Signal Below Normal Range",
-    engine: ["ISX15", "X15", "ISL9"],
-    causes: ["Failed upstream NOx sensor", "NOx sensor heater circuit fault", "Contaminated sensor element (oil/coolant)", "Wiring harness damage", "Poor ECM ground connection"],
-    steps: [
-      "Allow engine to reach full operating temperature — NOx sensor requires heat to activate",
-      "Check sensor heater circuit resistance: nominal 3–10 ohms",
-      "Inspect sensor connector and wiring harness for damage or moisture",
-      "Verify ECM ground integrity — resistance to chassis ground must be <0.5 ohm",
-      "Use INSITE live data to monitor NOx sensor output vs engine load",
-      "Replace NOx sensor if output is flat or erratic under varying engine load",
-    ],
-    parts: ["NOx Sensor (Upstream)"],
-    severity: "medium",
-  },
-  "SPN 157 FMI 18": {
-    issue: "Fuel Rail Pressure — Below Normal (Low Rail Pressure)",
-    engine: ["ISX15", "ISB6.7", "ISL9"],
-    causes: ["Restricted fuel supply (clogged filter)", "Worn fuel pump", "Leaking fuel injector return", "Low lift pump pressure", "Aerated fuel supply"],
-    steps: [
-      "Check Fleetguard primary and secondary fuel filter condition — replace if overdue",
-      "Measure lift pump supply pressure: nominal 8–15 PSI",
-      "Monitor fuel rail pressure via INSITE — should reach >1800 bar at full load on ISX15",
-      "Check fuel return restriction — measure back-pressure at tank return port",
-      "Inspect HP fuel pump drive gear for wear",
-      "Replace fuel filter kit first — most common root cause of low rail pressure",
-    ],
-    parts: ["Fleetguard Fuel Filter Kit", "Fuel Pump (ISL9)"],
-    severity: "high",
-  },
-};
+// const CUMMINS_OFFLINE_KB = {
+//   "SPN 651 FMI 5": {
+//     issue: "Injector Cylinder #1 — Open Circuit",
+//     engine: ["ISX15", "X15", "ISB6.7"],
+//     causes: ["Injector solenoid open circuit", "Damaged wiring harness to injector", "Faulty ECM driver circuit", "Corroded injector connector", "Failed fuel injector"],
+//     steps: [
+//       "Connect INSITE diagnostic software and confirm fault is active",
+//       "Perform injector cutout test — monitor RPM drop per cylinder",
+//       "Measure injector solenoid resistance: nominal 0.5–2.0 ohms",
+//       "Inspect injector harness connector for corrosion or damage",
+//       "Check ECM pin voltage for injector #1 driver circuit",
+//       "Replace injector if resistance is out of spec or solenoid fails",
+//     ],
+//     parts: ["Fuel Injector (ISX15)", "Fuel Injector (ISB6.7)"],
+//     severity: "high",
+//   },
+//   "SPN 2791 FMI 7": {
+//     issue: "EGR Valve — Mechanical Fault / Stuck",
+//     engine: ["ISX15", "X15", "ISL9"],
+//     causes: ["Carbon buildup jamming EGR valve", "Failed EGR actuator motor", "EGR cooler restriction", "Damaged valve seat", "Coolant contamination in EGR system"],
+//     steps: [
+//       "Use INSITE to command EGR valve through full range — observe actual vs commanded position",
+//       "Remove EGR valve and inspect for carbon deposits and mechanical binding",
+//       "Clean EGR valve and passages with approved carbon cleaner (Cummins #3824483)",
+//       "Inspect EGR cooler for internal leaks or blockage — perform pressure test",
+//       "Check EGR actuator motor resistance: nominal 8–15 ohms",
+//       "Replace EGR valve if actuator fails or valve is mechanically damaged",
+//     ],
+//     parts: ["EGR Valve (ISX15)", "EGR Valve (ISL9)"],
+//     severity: "high",
+//   },
+//   "SPN 3364 FMI 18": {
+//     issue: "Aftertreatment DEF Dosing — Rate Below Normal",
+//     engine: ["ISX15", "ISL9", "ISB6.7"],
+//     causes: ["Clogged DEF dosing injector", "DEF quality below spec (contaminated)", "Low DEF tank level", "DEF pump pressure fault", "Frozen DEF supply line (cold weather)"],
+//     steps: [
+//       "Check DEF tank level — minimum 10% required for dosing",
+//       "Test DEF quality using refractometer — urea concentration must be 31.8–33.2%",
+//       "Perform DEF dosing injector purge cycle via INSITE",
+//       "Inspect DEF supply line and strainer for blockage or ice",
+//       "Check DEF pump output pressure: nominal 80–130 PSI",
+//       "Replace DEF dosing injector if purge cycle fails to restore flow",
+//     ],
+//     parts: ["DEF Dosing Injector"],
+//     severity: "medium",
+//   },
+//   "SPN 3251 FMI 0": {
+//     issue: "DPF Differential Pressure — High (Soot Overloaded)",
+//     engine: ["ISX15", "ISB6.7", "ISL9"],
+//     causes: ["DPF soot accumulation above threshold", "Failed active regen due to low exhaust temp", "Restricted DPF pressure sensor port", "Short-haul duty cycle (insufficient regen temps)", "Oil consumption contaminating DPF"],
+//     steps: [
+//       "Check INSITE for soot load % — above 100% requires forced regen",
+//       "Perform parked forced regeneration via INSITE (engine must reach >550°C DPF inlet)",
+//       "Inspect DPF differential pressure sensor and ports for blockage",
+//       "Review duty cycle — frequent short trips prevent passive regen",
+//       "Check engine oil consumption — excessive blow-by contaminates DPF",
+//       "If forced regen fails to reduce soot below 70%, remove DPF for cleaning or replacement",
+//     ],
+//     parts: ["DPF Pressure Sensor", "DPF Filter (ISX15)"],
+//     severity: "critical",
+//   },
+//   "SPN 636 FMI 2": {
+//     issue: "Crankshaft Position Sensor — Erratic Signal",
+//     engine: ["ISX15", "ISB6.7", "ISL9", "ISC8.3"],
+//     causes: ["Damaged or worn CKP sensor", "Crankshaft reluctor ring damage", "Air gap out of specification", "Wiring harness chafing near sensor", "Electromagnetic interference from accessories"],
+//     steps: [
+//       "Inspect CKP sensor and mounting for physical damage",
+//       "Measure air gap between sensor and reluctor ring: nominal 0.5–1.5 mm",
+//       "Check sensor output voltage with scope — look for missing or erratic pulses",
+//       "Inspect wiring harness routing for chafing against engine block",
+//       "Measure sensor resistance: nominal 900–1100 ohms for magnetic pickup type",
+//       "Inspect reluctor ring for missing or damaged teeth",
+//       "Replace CKP sensor and re-check air gap",
+//     ],
+//     parts: ["Crankshaft Position Sensor"],
+//     severity: "high",
+//   },
+//   "SPN 641 FMI 5": {
+//     issue: "Variable Geometry Turbocharger (VGT) Actuator — Open Circuit",
+//     engine: ["ISX15", "X15"],
+//     causes: ["Failed VGT actuator solenoid", "Open circuit in actuator wiring", "Corroded actuator connector", "ECM driver circuit fault", "Mechanical jam in VGT vanes"],
+//     steps: [
+//       "Use INSITE to command VGT actuator — observe actual vs commanded vane position",
+//       "Measure actuator solenoid resistance: nominal 5–12 ohms",
+//       "Inspect actuator wiring and connector for corrosion or damage",
+//       "Perform VGT vane movement test — vanes should move freely through full range",
+//       "Check for carbon buildup on VGT vanes — clean with approved solvent if needed",
+//       "Replace turbocharger assembly if actuator or vane mechanism is mechanically failed",
+//     ],
+//     parts: ["Turbocharger (ISX15)"],
+//     severity: "high",
+//   },
+//   "SPN 3216 FMI 18": {
+//     issue: "NOx Sensor (Upstream) — Signal Below Normal Range",
+//     engine: ["ISX15", "X15", "ISL9"],
+//     causes: ["Failed upstream NOx sensor", "NOx sensor heater circuit fault", "Contaminated sensor element (oil/coolant)", "Wiring harness damage", "Poor ECM ground connection"],
+//     steps: [
+//       "Allow engine to reach full operating temperature — NOx sensor requires heat to activate",
+//       "Check sensor heater circuit resistance: nominal 3–10 ohms",
+//       "Inspect sensor connector and wiring harness for damage or moisture",
+//       "Verify ECM ground integrity — resistance to chassis ground must be <0.5 ohm",
+//       "Use INSITE live data to monitor NOx sensor output vs engine load",
+//       "Replace NOx sensor if output is flat or erratic under varying engine load",
+//     ],
+//     parts: ["NOx Sensor (Upstream)"],
+//     severity: "medium",
+//   },
+//   "SPN 157 FMI 18": {
+//     issue: "Fuel Rail Pressure — Below Normal (Low Rail Pressure)",
+//     engine: ["ISX15", "ISB6.7", "ISL9"],
+//     causes: ["Restricted fuel supply (clogged filter)", "Worn fuel pump", "Leaking fuel injector return", "Low lift pump pressure", "Aerated fuel supply"],
+//     steps: [
+//       "Check Fleetguard primary and secondary fuel filter condition — replace if overdue",
+//       "Measure lift pump supply pressure: nominal 8–15 PSI",
+//       "Monitor fuel rail pressure via INSITE — should reach >1800 bar at full load on ISX15",
+//       "Check fuel return restriction — measure back-pressure at tank return port",
+//       "Inspect HP fuel pump drive gear for wear",
+//       "Replace fuel filter kit first — most common root cause of low rail pressure",
+//     ],
+//     parts: ["Fleetguard Fuel Filter Kit", "Fuel Pump (ISL9)"],
+//     severity: "high",
+//   },
+// };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AGENT DEFINITIONS
@@ -297,6 +309,19 @@ export default function CumminsDiagnosticSystem() {
   const [syncMessage, setSyncMessage] = useState(null);  // transient confirmation banner
   const resultsRef = useRef(null);
 
+  // Initialize database on app startup
+  useEffect(() => {
+    const success = initializeDatabase()
+    if (success) {
+      console.log('✅ Database initialized successfully')
+      // Load recent runs from database
+      const recentRuns = getAllRuns(10)
+      console.log('Loaded', recentRuns.length, 'recent diagnostic runs')
+    } else {
+      console.error('❌ Database initialization failed')
+    }
+  }, [])
+
   useEffect(function() {
     function goUp() { setIsOnline(true); }
     function goDn() { setIsOnline(false); }
@@ -320,7 +345,19 @@ export default function CumminsDiagnosticSystem() {
     var spnFmiPattern = /SPN\s*\d+\s*FMI\s*\d+/gi;
     var codes = (input.faultCodes.toUpperCase().match(spnFmiPattern) || []).map(function(c) { return c.replace(/\s+/g, " ").trim(); });
     if (!isOnline) {
-      return { codes: codes, engineType: input.engineType, vehicle: input.vehicleModel, mileage: input.mileage, rawSymptoms: input.symptoms, severity: "medium" };
+      var severityRank = { critical: 4, high: 3, medium: 2, low: 1 };
+      var enriched = codes.map(function(code) {
+        var kb = CUMMINS_OFFLINE_KB[code];
+        if (!kb) return { code: code, found: false, severityScore: 0 };
+        return {
+          code: code, found: true, issue: kb.issue, severity: kb.severity,
+          severityScore: severityRank[kb.severity] || 1,
+          applicableToEngine: kb.engine.includes(input.engineType),
+          possibleCauses: kb.causes.slice(0, 3),
+        };
+      }).sort(function(a, b) { return (b.severityScore || 0) - (a.severityScore || 0); });
+      var topSev = enriched.length && enriched[0].severity ? enriched[0].severity : "medium";
+      return { codes: codes, enrichedCodes: enriched, engineType: input.engineType, vehicle: input.vehicleModel, mileage: input.mileage, rawSymptoms: input.symptoms, severity: topSev };
     }
     try {
       var raw = await callClaude(
@@ -336,8 +373,16 @@ export default function CumminsDiagnosticSystem() {
   async function runDiagnosticAgent(parsed) {
     var details = (parsed.codes || []).map(function(code) {
       var kb = CUMMINS_OFFLINE_KB[code];
-      if (kb) return { code: code, issue: kb.issue, causes: kb.causes, confidence: "88%", severity: kb.severity, engines: kb.engine };
-      return { code: code, issue: "Fault not in offline Cummins KB — connect online for AI diagnosis", causes: ["Refer to Cummins QSOL service literature", "Connect to internet for AI-assisted diagnosis"], confidence: "N/A", severity: "unknown", engines: [] };
+      if (kb) {
+        var hasElectrical = kb.causes.some(function(c) { return /connector|wiring|circuit|voltage|short/i.test(c); });
+        var confidence = hasElectrical ? "80%" : "55%";
+        return { code: code, issue: kb.issue, causes: kb.causes, confidence: confidence, severity: kb.severity, engines: kb.engine, estimatedTime: kb.estimatedTime || null };
+      }
+      // Fuzzy fallback: search KB for related issues by symptom keywords
+      var symptomWords = (parsed.rawSymptoms || "").split(/\s+/).filter(function(w) { return w.length > 4; });
+      var related = symptomWords.length ? searchKB.bySymptom(symptomWords[0]) : [];
+      var relatedNote = related.length ? " Related KB codes: " + related.slice(0, 2).map(function(r) { return r[0]; }).join(", ") + "." : "";
+      return { code: code, issue: "Fault not in offline Cummins KB — connect online for AI diagnosis." + relatedNote, causes: ["Refer to Cummins QSOL service literature", "Connect to internet for AI-assisted diagnosis"], confidence: "N/A", severity: "unknown", engines: [] };
     });
     if (!isOnline) {
       return { summary: details.length > 0 ? "Found " + details.length + " fault pattern(s) in Cummins local knowledge base." : "No matching Cummins codes found offline. Connect INSITE and go online for full diagnosis.", details: details };
@@ -358,7 +403,11 @@ export default function CumminsDiagnosticSystem() {
     var procedures = (parsed.codes || []).map(function(code) {
       var kb = CUMMINS_OFFLINE_KB[code];
       if (kb) {
-        return { code: code, title: kb.issue, tools: ["Cummins INSITE 8.x", "Inline 7 or 8 Adapter", "Fluke 87V Multimeter", "Cummins Fuel Pressure Test Kit 3824581"], safetyNote: "Depressurize fuel system before working on high-pressure components. Rail pressure can exceed 2000 bar on common rail engines.", steps: kb.steps };
+        var safetyNote = kb.severity === "critical"
+          ? "DO NOT operate vehicle until repair is complete. Ensure vehicle is on level ground with parking brake set. Depressurize fuel system before working on high-pressure components."
+          : "Depressurize fuel system before working on high-pressure components. Rail pressure can exceed 2000 bar on common rail engines.";
+        var partNums = kb.partNumbers ? Object.entries(kb.partNumbers).map(function(e) { return e[0] + ": " + e[1]; }) : [];
+        return { code: code, title: kb.issue, tools: ["Cummins INSITE 8.x", "Inline 7 or 8 Adapter", "Fluke 87V Multimeter", "Cummins Fuel Pressure Test Kit 3824581"], safetyNote: safetyNote, steps: kb.steps, partNumbers: kb.partNumbers || {}, partNumbersList: partNums, estimatedTime: kb.estimatedTime || null };
       }
       return { code: code, title: "General Cummins Inspection", tools: ["Cummins INSITE", "Inline 7 Adapter"], safetyNote: "Refer to Cummins QSOL for engine-specific torque specs and safety procedures.", steps: ["Connect INSITE and confirm fault codes active vs inactive", "Review fault code snapshot data for conditions at time of fault", "Perform applicable INSITE diagnostic tests for fault code", "Consult QSOL service manual for engine-specific procedure", "Contact Cummins Technical Assistance if root cause not identified"] };
     });
@@ -385,11 +434,23 @@ export default function CumminsDiagnosticSystem() {
     (parsed.codes || []).forEach(function(code) {
       var kb = CUMMINS_OFFLINE_KB[code];
       if (kb) {
-        kb.parts.forEach(function(partName) {
-          if (!parts.find(function(p) { return p.partName === partName; })) {
-            parts.push({ partName: partName, reason: "Required for " + code + " — " + kb.issue, priority: kb.severity === "critical" ? "immediate" : kb.severity === "high" ? "immediate" : "soon", estimatedCost: "See warehouse", oem: "Cummins Genuine OEM", aftermarket: "Cummins Recon / Fleetguard" });
-          }
-        });
+        var priority = (kb.severity === "critical" || kb.severity === "high") ? "immediate" : "soon";
+        // Old KB format: parts is an array of warehouse-lookup names
+        if (kb.parts && kb.parts.length) {
+          kb.parts.forEach(function(partName) {
+            if (!parts.find(function(p) { return p.partName === partName; })) {
+              parts.push({ partName: partName, reason: "Required for " + code + " — " + kb.issue, priority: priority, estimatedCost: "See warehouse", oem: "Cummins Genuine OEM", aftermarket: "Cummins Recon / Fleetguard" });
+            }
+          });
+        // Expanded KB format: partNumbers is an object { component: partNum }
+        } else if (kb.partNumbers) {
+          Object.entries(kb.partNumbers).forEach(function(entry) {
+            var component = entry[0], partNum = entry[1];
+            if (!parts.find(function(p) { return p.partNum === partNum; })) {
+              parts.push({ partName: kb.issue + " — " + component, partNum: partNum, reason: "Required for " + code + " — " + kb.issue, priority: priority, estimatedCost: "See warehouse", oem: "Cummins Genuine OEM", aftermarket: "Cummins Recon / Fleetguard" });
+            }
+          });
+        }
       }
     });
     if (!parts.length) {
@@ -535,7 +596,7 @@ export default function CumminsDiagnosticSystem() {
     var localLog = [];
 
     var orch = new Orchestrator({
-      maxTokens:   6000,   // sum of all agent tokenBudgets is 4400 — 6000 gives headroom
+      maxTokens:   6000,
       maxSteps:    6,
       timeoutMs:   45000,
       stepDelayMs: 450,
@@ -552,6 +613,7 @@ export default function CumminsDiagnosticSystem() {
       onLogEntry: function(entry) {
         localLog.push(entry);
         setDecisionLog(function(l) { return l.concat([entry]); });
+        logDecision(entry);
       },
       onEscalation: function(esc) {
         setEscalations(function(e) { return e.concat([esc]); });
@@ -559,6 +621,8 @@ export default function CumminsDiagnosticSystem() {
     });
 
     var orchResult = await orch.run(input, agentDefs);
+    startDiagnosticRun(orchResult.runId, orchResult.caseId);
+    endDiagnosticRun(orchResult.runId, orchResult.aborted, orchResult.abortReason);
 
     // ── Persist run record ──────────────────────────────────────────────────
     var runAt = new Date().toISOString();
@@ -605,23 +669,29 @@ export default function CumminsDiagnosticSystem() {
     // Write a human-approval row into the decision log so the audit trail is
     // complete — every approval is timestamped and attributed to a named person.
     var firstEntry = decisionLog[0] || {};
-    setDecisionLog(function(l) {
-      return l.concat([{
-        type:                   "approval",
-        run_id:                 firstEntry.run_id  || "—",
-        case_id:                firstEntry.case_id || "—",
-        agent_name:             "human-approval",
-        started_at:             ts,
-        ended_at:               ts,
-        inputs_hash:            "—",
-        outputs_hash:           "—",
-        confidence:             "APPROVED",
-        mode:                   "human",
-        model_name:             "human:" + name,
-        token_budget:           0,
-        tokens_used_cumulative: "—",
-      }]);
-    });
+    var approvalEntry = {
+      type:                   "approval",
+      run_id:                 firstEntry.run_id  || "—",
+      case_id:                firstEntry.case_id || "—",
+      agent_name:             "human-approval",
+      started_at:             ts,
+      ended_at:               ts,
+      inputs_hash:            "—",
+      outputs_hash:           "—",
+      confidence:             "APPROVED",
+      mode:                   "human",
+      model_name:             "human:" + name,
+      token_budget:           0,
+      tokens_used_cumulative: "—",
+      approval_status:        "approved",
+      approver_id:            name,
+      approval_timestamp:     ts,
+      approval_reason:        approval.reasons.join("; ") || null,
+      warehouse_selected:     null,
+      technician_accepted:    true,
+    };
+    logDecision(approvalEntry);
+    setDecisionLog(function(l) { return l.concat([approvalEntry]); });
   }
 
   var statusColor = { running: "#E31837", done: "#00C853", error: "#FF1744", idle: "#444" };

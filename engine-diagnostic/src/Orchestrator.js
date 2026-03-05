@@ -118,7 +118,7 @@ export function Orchestrator(config) {
 
   this.stepDelayMs      = config.stepDelayMs      != null ? config.stepDelayMs : 450;
   this.escalationRules  = config.escalationRules  || ESCALATION_RULES;
-  this.model            = config.model            || "claude-sonnet-4-20250514";
+  this.model = config.model || "mistral:7b-instruct";
   this.isOnline         = config.isOnline         || false;
 
   // React state callbacks — wired from App.jsx so the Orchestrator stays
@@ -226,6 +226,11 @@ Orchestrator.prototype.run = async function(input, agentDefs) {
 
     // ── Write decision log entry ─────────────────────────────────────────────
     var endedAt  = new Date().toISOString();
+    var warehouseSelected = null;
+    if (step.id === "warehouse" && !errorMsg) {
+      var firstInStock = (result.availability || []).find(function(a) { return a.stock > 0; });
+      warehouseSelected = firstInStock ? firstInStock.warehouse.id : null;
+    }
     var logEntry = {
       run_id:                  runId,
       case_id:                 caseId,
@@ -239,6 +244,12 @@ Orchestrator.prototype.run = async function(input, agentDefs) {
       model_name:              agentModel,
       token_budget:            step.tokenBudget != null ? step.tokenBudget : 0,
       tokens_used_cumulative:  this.budget.tokensUsed,
+      approval_status:         "pending",
+      approver_id:             null,
+      approval_timestamp:      null,
+      approval_reason:         null,
+      warehouse_selected:      warehouseSelected,
+      technician_accepted:     null,
     };
     if (errorMsg) logEntry.error = errorMsg;
 
