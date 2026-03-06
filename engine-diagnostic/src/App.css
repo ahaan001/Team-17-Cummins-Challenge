@@ -1,42 +1,43 @@
 #root {
-  max-width: 1280px;
-  margin: 0 auto;
+  width: 100%;
+  margin: 0;
+  padding: 0; /* Set to 0 so your Header/Nav can be full-width */
+  text-align: left; /* Dashboards should be left-aligned, not centered */
+}
+
+/* Ensure your main content area has some breathing room below the header */
+.main-content {
   padding: 2rem;
-  text-align: center;
+  max-width: 1600px; /* Optional: keeps the forms from getting TOO wide on ultrawide monitors */
+  margin: 0 auto;
 }
 
 .logo {
-  height: 6em;
-  padding: 1.5em;
+  height: 3em; /* Slightly smaller for a navbar */
+  padding: 1em;
   will-change: filter;
   transition: filter 300ms;
 }
+
 .logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafbaa);
-}
-
-@keyframes logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
-  }
+  filter: drop-shadow(0 0 2em #da291caa);
 }
 
 .card {
-  padding: 2em;
+  padding: 1.5em;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 4px;
 }
 
 .read-the-docs {
   color: #888;
+}
+
+/* Utility for your grid of "Common Fault Scenarios" */
+.fault-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1.5rem;
+  margin-top: 2rem;
 }
