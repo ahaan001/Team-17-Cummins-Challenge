@@ -12,7 +12,7 @@ import { CUMMINS_OFFLINE_KB_EXPANDED as KB } from './ExpandedKBdatabase.js';
 
 const FaultParserAgent = {
   id: "fault-parser",
-  fn: async (previousResults) => {
+  fn: async () => {
     // Input: Raw fault codes from vehicle telemetry or scanner
     // Example: "SPN 27 FMI 2" from INSITE scanner output
     
@@ -105,10 +105,6 @@ const DiagnosticAgent = {
       const hasElectricalCauses = kbEntry.causes.some(c => 
         /connector|wiring|circuit|voltage|short/.test(c.toLowerCase())
       );
-      const hasEnvironmentalCauses = kbEntry.causes.some(c =>
-        /vibration|moisture|contamination|age/.test(c.toLowerCase())
-      );
-
       // Electrical issues are easier to diagnose (80% confidence)
       // Environmental issues are harder (50% confidence) — require extended testing
       const confidence = hasElectricalCauses ? "80%" : "55%";
@@ -159,18 +155,10 @@ const TroubleshootAgent = {
       .map(fault => {
         const kbEntry = KB[fault.code];
 
-        // Step 1: Build complete repair procedure
-        const fullProcedure = {
-          code: fault.code,
-          issue: kbEntry.issue,
-          symptom: "Engine fault flag; possible derate or limp mode",
-          rootCauseRange: kbEntry.causes
-        };
-
-        // Step 2: Extract repair-focused steps (typically steps 4-10 in KB)
+        // Step 1: Extract repair-focused steps (typically steps 4-10 in KB)
         const repairSteps = kbEntry.steps.slice(4, kbEntry.steps.length);
 
-        // Step 3: Identify required parts and tools
+        // Step 2: Identify required parts and tools
         const requiredParts = Object.entries(kbEntry.partNumbers || {})
           .map(([component, partNum]) => ({
             component,
@@ -319,29 +307,29 @@ export const searchKB = {
   
   // Find all codes for a specific engine
   byEngine: (engineType) => {
-    return Object.entries(KB).filter(([code, entry]) => 
+    return Object.entries(KB).filter(([, entry]) =>
       entry.engine.includes(engineType)
     );
   },
 
   // Find all codes of a specific severity
   bySeverity: (severity) => {
-    return Object.entries(KB).filter(([code, entry]) => 
+    return Object.entries(KB).filter(([, entry]) =>
       entry.severity === severity
     );
   },
 
   // Find codes by system (EGR, Turbo, Fuel, etc.)
   bySystem: (systemKeyword) => {
-    return Object.entries(KB).filter(([code, entry]) =>
+    return Object.entries(KB).filter(([, entry]) =>
       entry.issue.toLowerCase().includes(systemKeyword.toLowerCase())
     );
   },
 
   // Find codes that match a symptom
   bySymptom: (symptomKeyword) => {
-    return Object.entries(KB).filter(([code, entry]) =>
-      entry.causes.some(c => 
+    return Object.entries(KB).filter(([, entry]) =>
+      entry.causes.some(c =>
         c.toLowerCase().includes(symptomKeyword.toLowerCase())
       )
     );

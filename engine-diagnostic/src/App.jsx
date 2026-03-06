@@ -6,11 +6,15 @@ import {
   startDiagnosticRun, 
   endDiagnosticRun, 
   logDecision, 
-  getRunLogs, 
-  getAllRuns 
+  getAllRuns,
+  updateRunApprovalStatus,
 } from './database'
 import {CUMMINS_OFFLINE_KB_EXPANDED as CUMMINS_OFFLINE_KB} from "./ExpandedKBdatabase.js";
 import { searchKB } from "./agent_usage.js";
+import { callLLM } from "./llmProvider.js";
+import { getCompetencyLevel, getSafetyChecklistForCode } from "./competencyHelper.js";
+import { getCachedResult, setCachedResult } from "./resultCache.js";
+import { sortByQuickWin, isQuickWin } from "./quickWinHelper.js";
 // ─────────────────────────────────────────────────────────────────────────────
 // CUMMINS SYNTHETIC WAREHOUSE & PARTS DATABASE
 // ─────────────────────────────────────────────────────────────────────────────
@@ -95,133 +99,6 @@ const CUMMINS_WAREHOUSE_DB = {
   },
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CUMMINS OFFLINE KNOWLEDGE BASE (SPN/FMI Fault Codes)
-// DEPRECATED: Replaced by ExpandedKBdatabase.js — imported above as CUMMINS_OFFLINE_KB
-// ─────────────────────────────────────────────────────────────────────────────
-// const CUMMINS_OFFLINE_KB = {
-//   "SPN 651 FMI 5": {
-//     issue: "Injector Cylinder #1 — Open Circuit",
-//     engine: ["ISX15", "X15", "ISB6.7"],
-//     causes: ["Injector solenoid open circuit", "Damaged wiring harness to injector", "Faulty ECM driver circuit", "Corroded injector connector", "Failed fuel injector"],
-//     steps: [
-//       "Connect INSITE diagnostic software and confirm fault is active",
-//       "Perform injector cutout test — monitor RPM drop per cylinder",
-//       "Measure injector solenoid resistance: nominal 0.5–2.0 ohms",
-//       "Inspect injector harness connector for corrosion or damage",
-//       "Check ECM pin voltage for injector #1 driver circuit",
-//       "Replace injector if resistance is out of spec or solenoid fails",
-//     ],
-//     parts: ["Fuel Injector (ISX15)", "Fuel Injector (ISB6.7)"],
-//     severity: "high",
-//   },
-//   "SPN 2791 FMI 7": {
-//     issue: "EGR Valve — Mechanical Fault / Stuck",
-//     engine: ["ISX15", "X15", "ISL9"],
-//     causes: ["Carbon buildup jamming EGR valve", "Failed EGR actuator motor", "EGR cooler restriction", "Damaged valve seat", "Coolant contamination in EGR system"],
-//     steps: [
-//       "Use INSITE to command EGR valve through full range — observe actual vs commanded position",
-//       "Remove EGR valve and inspect for carbon deposits and mechanical binding",
-//       "Clean EGR valve and passages with approved carbon cleaner (Cummins #3824483)",
-//       "Inspect EGR cooler for internal leaks or blockage — perform pressure test",
-//       "Check EGR actuator motor resistance: nominal 8–15 ohms",
-//       "Replace EGR valve if actuator fails or valve is mechanically damaged",
-//     ],
-//     parts: ["EGR Valve (ISX15)", "EGR Valve (ISL9)"],
-//     severity: "high",
-//   },
-//   "SPN 3364 FMI 18": {
-//     issue: "Aftertreatment DEF Dosing — Rate Below Normal",
-//     engine: ["ISX15", "ISL9", "ISB6.7"],
-//     causes: ["Clogged DEF dosing injector", "DEF quality below spec (contaminated)", "Low DEF tank level", "DEF pump pressure fault", "Frozen DEF supply line (cold weather)"],
-//     steps: [
-//       "Check DEF tank level — minimum 10% required for dosing",
-//       "Test DEF quality using refractometer — urea concentration must be 31.8–33.2%",
-//       "Perform DEF dosing injector purge cycle via INSITE",
-//       "Inspect DEF supply line and strainer for blockage or ice",
-//       "Check DEF pump output pressure: nominal 80–130 PSI",
-//       "Replace DEF dosing injector if purge cycle fails to restore flow",
-//     ],
-//     parts: ["DEF Dosing Injector"],
-//     severity: "medium",
-//   },
-//   "SPN 3251 FMI 0": {
-//     issue: "DPF Differential Pressure — High (Soot Overloaded)",
-//     engine: ["ISX15", "ISB6.7", "ISL9"],
-//     causes: ["DPF soot accumulation above threshold", "Failed active regen due to low exhaust temp", "Restricted DPF pressure sensor port", "Short-haul duty cycle (insufficient regen temps)", "Oil consumption contaminating DPF"],
-//     steps: [
-//       "Check INSITE for soot load % — above 100% requires forced regen",
-//       "Perform parked forced regeneration via INSITE (engine must reach >550°C DPF inlet)",
-//       "Inspect DPF differential pressure sensor and ports for blockage",
-//       "Review duty cycle — frequent short trips prevent passive regen",
-//       "Check engine oil consumption — excessive blow-by contaminates DPF",
-//       "If forced regen fails to reduce soot below 70%, remove DPF for cleaning or replacement",
-//     ],
-//     parts: ["DPF Pressure Sensor", "DPF Filter (ISX15)"],
-//     severity: "critical",
-//   },
-//   "SPN 636 FMI 2": {
-//     issue: "Crankshaft Position Sensor — Erratic Signal",
-//     engine: ["ISX15", "ISB6.7", "ISL9", "ISC8.3"],
-//     causes: ["Damaged or worn CKP sensor", "Crankshaft reluctor ring damage", "Air gap out of specification", "Wiring harness chafing near sensor", "Electromagnetic interference from accessories"],
-//     steps: [
-//       "Inspect CKP sensor and mounting for physical damage",
-//       "Measure air gap between sensor and reluctor ring: nominal 0.5–1.5 mm",
-//       "Check sensor output voltage with scope — look for missing or erratic pulses",
-//       "Inspect wiring harness routing for chafing against engine block",
-//       "Measure sensor resistance: nominal 900–1100 ohms for magnetic pickup type",
-//       "Inspect reluctor ring for missing or damaged teeth",
-//       "Replace CKP sensor and re-check air gap",
-//     ],
-//     parts: ["Crankshaft Position Sensor"],
-//     severity: "high",
-//   },
-//   "SPN 641 FMI 5": {
-//     issue: "Variable Geometry Turbocharger (VGT) Actuator — Open Circuit",
-//     engine: ["ISX15", "X15"],
-//     causes: ["Failed VGT actuator solenoid", "Open circuit in actuator wiring", "Corroded actuator connector", "ECM driver circuit fault", "Mechanical jam in VGT vanes"],
-//     steps: [
-//       "Use INSITE to command VGT actuator — observe actual vs commanded vane position",
-//       "Measure actuator solenoid resistance: nominal 5–12 ohms",
-//       "Inspect actuator wiring and connector for corrosion or damage",
-//       "Perform VGT vane movement test — vanes should move freely through full range",
-//       "Check for carbon buildup on VGT vanes — clean with approved solvent if needed",
-//       "Replace turbocharger assembly if actuator or vane mechanism is mechanically failed",
-//     ],
-//     parts: ["Turbocharger (ISX15)"],
-//     severity: "high",
-//   },
-//   "SPN 3216 FMI 18": {
-//     issue: "NOx Sensor (Upstream) — Signal Below Normal Range",
-//     engine: ["ISX15", "X15", "ISL9"],
-//     causes: ["Failed upstream NOx sensor", "NOx sensor heater circuit fault", "Contaminated sensor element (oil/coolant)", "Wiring harness damage", "Poor ECM ground connection"],
-//     steps: [
-//       "Allow engine to reach full operating temperature — NOx sensor requires heat to activate",
-//       "Check sensor heater circuit resistance: nominal 3–10 ohms",
-//       "Inspect sensor connector and wiring harness for damage or moisture",
-//       "Verify ECM ground integrity — resistance to chassis ground must be <0.5 ohm",
-//       "Use INSITE live data to monitor NOx sensor output vs engine load",
-//       "Replace NOx sensor if output is flat or erratic under varying engine load",
-//     ],
-//     parts: ["NOx Sensor (Upstream)"],
-//     severity: "medium",
-//   },
-//   "SPN 157 FMI 18": {
-//     issue: "Fuel Rail Pressure — Below Normal (Low Rail Pressure)",
-//     engine: ["ISX15", "ISB6.7", "ISL9"],
-//     causes: ["Restricted fuel supply (clogged filter)", "Worn fuel pump", "Leaking fuel injector return", "Low lift pump pressure", "Aerated fuel supply"],
-//     steps: [
-//       "Check Fleetguard primary and secondary fuel filter condition — replace if overdue",
-//       "Measure lift pump supply pressure: nominal 8–15 PSI",
-//       "Monitor fuel rail pressure via INSITE — should reach >1800 bar at full load on ISX15",
-//       "Check fuel return restriction — measure back-pressure at tank return port",
-//       "Inspect HP fuel pump drive gear for wear",
-//       "Replace fuel filter kit first — most common root cause of low rail pressure",
-//     ],
-//     parts: ["Fleetguard Fuel Filter Kit", "Fuel Pump (ISL9)"],
-//     severity: "high",
-//   },
-// };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AGENT DEFINITIONS
@@ -260,31 +137,6 @@ const PRESETS = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CLAUDE API CALL
-// ─────────────────────────────────────────────────────────────────────────────
-async function callClaude(systemPrompt, userMessage, maxTokens) {
-  var tokens = maxTokens || 800;
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": import.meta.env.VITE_ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true",
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: tokens,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userMessage }],
-    }),
-  });
-  if (!response.ok) throw new Error("API error " + response.status);
-  const data = await response.json();
-  return data.content.map(function(b) { return b.text || ""; }).join("\n");
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // AGENT FUNCTIONS
 // ─────────────────────────────────────────────────────────────────────────────
 export default function CumminsDiagnosticSystem() {
@@ -307,7 +159,19 @@ export default function CumminsDiagnosticSystem() {
   const [runMeta, setRunMeta] = useState(null);          // { runId, caseId, runAt, mode }
   const [pendingSync, setPendingSync] = useState([]);    // offline runs queued for reconciliation
   const [syncMessage, setSyncMessage] = useState(null);  // transient confirmation banner
+  const [llmProvider, setLlmProvider] = useState(function() {
+    try { return localStorage.getItem("cummins_llm_provider") || "claude"; } catch (e) { void e; return "claude"; }
+  });
+  const [ollamaModel, setOllamaModel] = useState("mistral");
+  const [techCompetencyLevel, setTechCompetencyLevel] = useState(1);  // 1=junior, 2=intermediate, 3=expert
+  const [useCache, setUseCache] = useState(true);
+  const [appMode, setAppMode] = useState("field");  // "field" | "backoffice"
+  const [rejectionReason, setRejectionReason] = useState("");
   const resultsRef = useRef(null);
+
+  useEffect(function() {
+    try { localStorage.setItem("cummins_llm_provider", llmProvider); } catch (e) { void e; }
+  }, [llmProvider]);
 
   // Initialize database on app startup
   useEffect(() => {
@@ -338,7 +202,7 @@ export default function CumminsDiagnosticSystem() {
     try {
       var stored = localStorage.getItem("cummins_pending_sync");
       if (stored) setPendingSync(JSON.parse(stored));
-    } catch(e) {}
+    } catch (e) { void e; }
   }, []);
 
   async function runFaultParserAgent(input) {
@@ -360,12 +224,14 @@ export default function CumminsDiagnosticSystem() {
       return { codes: codes, enrichedCodes: enriched, engineType: input.engineType, vehicle: input.vehicleModel, mileage: input.mileage, rawSymptoms: input.symptoms, severity: topSev };
     }
     try {
-      var raw = await callClaude(
+      var raw = await callLLM(llmProvider,
         "You are a Cummins FaultParser Agent. Extract and validate all Cummins SPN/FMI fault codes, engine model (ISX15, X15, ISB6.7, ISL9, ISC8.3, QSB, QSK etc.), vehicle/equipment info, and hours/mileage from technician input. Return valid JSON only with no markdown fences.",
-        "Engine: " + input.engineType + "\nVehicle/Equipment: " + input.vehicleModel + "\nMileage/Hours: " + input.mileage + "\nFault Codes: " + input.faultCodes + "\nSymptoms: " + input.symptoms + "\n\nReturn JSON: { \"codes\": [], \"engineType\": \"\", \"vehicle\": \"\", \"mileage\": \"\", \"rawSymptoms\": \"\", \"severity\": \"low|medium|high|critical\", \"affectedSystem\": \"\" }"
+        "Engine: " + input.engineType + "\nVehicle/Equipment: " + input.vehicleModel + "\nMileage/Hours: " + input.mileage + "\nFault Codes: " + input.faultCodes + "\nSymptoms: " + input.symptoms + "\n\nReturn JSON: { \"codes\": [], \"engineType\": \"\", \"vehicle\": \"\", \"mileage\": \"\", \"rawSymptoms\": \"\", \"severity\": \"low|medium|high|critical\", \"affectedSystem\": \"\" }",
+        800, ollamaModel
       );
       return JSON.parse(raw.replace(/```json|```/g, "").trim());
-    } catch(e) {
+    } catch (e) {
+      void e;
       return { codes: codes, engineType: input.engineType, vehicle: input.vehicleModel, mileage: input.mileage, rawSymptoms: input.symptoms, severity: "medium", affectedSystem: "Unknown" };
     }
   }
@@ -388,13 +254,14 @@ export default function CumminsDiagnosticSystem() {
       return { summary: details.length > 0 ? "Found " + details.length + " fault pattern(s) in Cummins local knowledge base." : "No matching Cummins codes found offline. Connect INSITE and go online for full diagnosis.", details: details };
     }
     try {
-      var raw = await callClaude(
+      var raw = await callLLM(llmProvider,
         "You are a Cummins Diagnostic Agent with deep expertise in ISX15, X15, ISB6.7, ISL9, ISC8.3, QSB and QSK engine platforms. Analyze SPN/FMI fault codes and symptoms to identify root causes with confidence scores. Reference Cummins QSOL service procedures. Return valid JSON only with no markdown fences.",
-        "Parsed fault data: " + JSON.stringify(parsed) + "\n\nReturn JSON: { \"summary\": \"\", \"details\": [{ \"code\": \"\", \"issue\": \"\", \"causes\": [], \"confidence\": \"\", \"severity\": \"\", \"affectedSystem\": \"\" }] }",
-        1000
+        "Parsed fault data: " + JSON.stringify(parsed) + "\n\nReturn JSON: { \"summary\": \"\", \"details\": [{ \"code\": \"\", \"issue\": \"\", \"causes\": [], \"confidence\": \"\", \"severity\": \"\", \"affectedSystem\": \"\", \"estimatedTime\": \"\" }] }",
+        1000, ollamaModel
       );
       return JSON.parse(raw.replace(/```json|```/g, "").trim());
-    } catch(e) {
+    } catch (e) {
+      void e;
       return { summary: "AI parse error — showing Cummins local KB results.", details: details };
     }
   }
@@ -418,13 +285,14 @@ export default function CumminsDiagnosticSystem() {
       return { procedures: procedures };
     }
     try {
-      var raw = await callClaude(
+      var raw = await callLLM(llmProvider,
         "You are a Cummins Master Technician. Generate detailed Cummins INSITE-guided step-by-step repair procedures for each SPN/FMI fault. Include Cummins-specific service tools, QSOL references, and safety warnings per Cummins service literature. Return valid JSON only with no markdown fences.",
         "Vehicle: " + parsed.vehicle + ", Engine: " + parsed.engineType + ", Mileage/Hours: " + parsed.mileage + "\nDiagnosis: " + JSON.stringify(diagnostic) + "\n\nReturn JSON: { \"procedures\": [{ \"code\": \"\", \"title\": \"\", \"tools\": [], \"safetyNote\": \"\", \"qsolRef\": \"\", \"steps\": [] }] }",
-        1200
+        1200, ollamaModel
       );
       return JSON.parse(raw.replace(/```json|```/g, "").trim());
-    } catch(e) {
+    } catch (e) {
+      void e;
       return { procedures: procedures };
     }
   }
@@ -460,17 +328,18 @@ export default function CumminsDiagnosticSystem() {
       return { parts: parts };
     }
     try {
-      var raw = await callClaude(
+      var raw = await callLLM(llmProvider,
         "You are a Cummins Parts Specialist. Recommend Cummins OEM, Cummins Recon (remanufactured), and Fleetguard replacement parts with genuine Cummins part numbers where possible. Prioritize Cummins-genuine parts. Return valid JSON only with no markdown fences.",
         "Diagnosis: " + JSON.stringify(diagnostic) + "\nEngine: " + parsed.engineType + ", Vehicle: " + parsed.vehicle + "\n\nReturn JSON: { \"parts\": [{ \"partName\": \"\", \"reason\": \"\", \"priority\": \"immediate|soon|preventive\", \"estimatedCost\": \"$\", \"oem\": \"\", \"aftermarket\": \"\", \"coreExchange\": true|false }] }",
-        800
+        800, ollamaModel
       );
       var result = JSON.parse(raw.replace(/```json|```/g, "").trim());
       result.parts = (result.parts || []).map(function(p) {
         return Object.assign({}, p, { warehouseOptions: CUMMINS_WAREHOUSE_DB.parts[p.partName] || [] });
       });
       return result;
-    } catch(e) {
+    } catch (e) {
+      void e;
       return { parts: parts };
     }
   }
@@ -513,22 +382,50 @@ export default function CumminsDiagnosticSystem() {
     });
     if (isOnline && outOfStock.length > 0) {
       try {
-        var raw = await callClaude(
+        var raw = await callLLM(llmProvider,
           "You are a Cummins Alternative Parts Agent and procurement specialist. For out-of-stock Cummins parts, suggest Cummins ReCon units, Fleetguard alternatives, Cummins Care programs, and cross-reference options. Prioritize genuine Cummins alternatives. Return valid JSON only with no markdown fences.",
           "Out of stock Cummins parts: " + JSON.stringify(outOfStock) + "\n\nReturn JSON: { \"suggestions\": { \"partName\": { \"alternatives\": [], \"cumminsPrograms\": [] } } }",
-          600
+          600, ollamaModel
         );
         var ai = JSON.parse(raw.replace(/```json|```/g, "").trim());
         Object.keys(ai.suggestions || {}).forEach(function(k) {
           var aiAlts = (ai.suggestions[k] && ai.suggestions[k].alternatives) ? ai.suggestions[k].alternatives : [];
           alternatives[k] = (alternatives[k] || []).concat(aiAlts);
         });
-      } catch(e) {}
+      } catch (e) { void e; }
     }
     return { outOfStock: outOfStock.map(function(p) { return p.partName; }), alternatives: alternatives };
   }
 
-  // ── Export decision log as a downloadable JSON file ────────────────────────
+  function handleReject() {
+    if (!rejectionReason.trim()) return;
+    var ts = new Date().toISOString();
+    var name = approval.approverName.trim() || "Unknown";
+    updateRunApprovalStatus(decisionLog[0]?.run_id || runMeta?.runId, "rejected", name, rejectionReason);
+    setApproval(function(a) { return Object.assign({}, a, { approved: false, rejected: true, rejectTimestamp: ts, rejectionReason: rejectionReason }); });
+    logDecision({
+      type: "rejection", run_id: decisionLog[0]?.run_id || "—", case_id: decisionLog[0]?.case_id || "—",
+      agent_name: "human-rejection", started_at: ts, ended_at: ts, approver_id: name, approval_rejection_reason: rejectionReason,
+    });
+  }
+
+  function loadRunForView(r) {
+    try {
+      var raw = localStorage.getItem("cummins_run_" + r.id);
+      if (!raw) return;
+      var data = JSON.parse(raw);
+      if (data.results) setAgentResults(data.results);
+      if (data.log) setDecisionLog(data.log);
+      setRunMeta({ runId: data.runId || r.id, caseId: data.caseId || r.case_id, runAt: data.runAt, mode: data.mode || "online", synced: data.synced });
+      setShowResults(true);
+      var riskResult = classifyRisk(data.results?.["fault-parser"], data.results?.["diagnostic"]);
+      setApproval(riskResult.requiresApproval ? { required: true, reasons: riskResult.reasons, approved: r.approval_status === "approved", approverName: "", approverChecked: false, timestamp: null, rejected: r.approval_status === "rejected", rejectionReason: r.approval_rejection_reason } : { required: false, reasons: [], approved: true, approverName: "", approverChecked: false, timestamp: null });
+      setTab("results");
+      setAppMode("field");
+    } catch (e) { void e; }
+  }
+
+  // ── Export decision log as JSON ────────────────────────────────────────────
   function exportDecisionLog() {
     var data = {
       exportedAt:  new Date().toISOString(),
@@ -547,6 +444,20 @@ export default function CumminsDiagnosticSystem() {
     URL.revokeObjectURL(url);
   }
 
+  // ── Export / Print Report as PDF (browser Print → Save as PDF) ─────────────
+  function exportReportPDF() {
+    var printContent = document.getElementById("diagnostic-report-print");
+    if (!printContent) {
+      window.print();
+      return;
+    }
+    var w = window.open("", "_blank");
+    w.document.write("<html><head><title>Cummins Diagnostic Report</title><style>body{font-family:sans-serif;padding:20px;background:#fff;color:#000;} table{border-collapse:collapse;width:100%;} th,td{border:1px solid #ccc;padding:8px;} th{background:#E31837;color:#fff;}</style></head><body><h1>Cummins Engine Diagnostic Report</h1>" + printContent.innerHTML + "</body></html>");
+    w.document.close();
+    w.print();
+    w.close();
+  }
+
   // ── Reconcile queued offline runs → mark synced in localStorage ────────────
   function syncPendingRuns() {
     var count = pendingSync.length;
@@ -557,16 +468,42 @@ export default function CumminsDiagnosticSystem() {
           "cummins_run_" + run.runId,
           JSON.stringify(Object.assign({}, run, { synced: true }))
         );
-      } catch(e) {}
+      } catch (e) { void e; }
     });
     setPendingSync([]);
-    try { localStorage.removeItem("cummins_pending_sync"); } catch(e) {}
+    try { localStorage.removeItem("cummins_pending_sync"); } catch (e) { void e; }
     setSyncMessage("✓ " + count + " offline run" + (count !== 1 ? "s" : "") + " committed to local store");
     setTimeout(function() { setSyncMessage(null); }, 4000);
   }
 
   async function runDiagnosticPipeline() {
     if (!engineType && !faultCodes && !symptoms) return;
+    var input = { engineType: engineType, faultCodes: faultCodes, symptoms: symptoms, mileage: mileage, vehicleModel: vehicleModel };
+
+    // Cache check — skip pipeline if same input was run recently
+    if (useCache && isOnline) {
+      var cached = getCachedResult(input);
+      if (cached && cached.results) {
+        var runId = "RUN-" + Date.now().toString(36).toUpperCase();
+        var caseId = "CASE-" + (Math.abs((input.faultCodes + input.engineType).split("").reduce(function(a, b) { a = (a << 5) - a + b.charCodeAt(0); return a & a; }, 0)) >>> 0).toString(36);
+        startDiagnosticRun(runId, caseId, input);
+        endDiagnosticRun(runId, false, null);
+        setAgentResults(cached.results);
+        setAgentStatus({ "fault-parser": "done", "diagnostic": "done", "troubleshoot": "done", "parts": "done", "warehouse": "done", "alternative": "done" });
+        setDecisionLog(cached.log || []);
+        var runAtCached = new Date().toISOString();
+        setRunMeta({ runId: runId, caseId: caseId, runAt: runAtCached, mode: "online" });
+        var riskCached = classifyRisk(cached.results["fault-parser"], cached.results["diagnostic"]);
+        setApproval(riskCached.requiresApproval ? { required: true, reasons: riskCached.reasons, approved: false, approverName: "", approverChecked: false, timestamp: null } : { required: false, reasons: [], approved: false, approverName: "", approverChecked: false, timestamp: null });
+        if (riskCached.requiresApproval) updateRunApprovalStatus(runId, "requires_approval", null, null);
+        try { localStorage.setItem("cummins_run_" + runId, JSON.stringify({ runId, caseId, runAt: runAtCached, mode: "online", input, log: cached.log || [], results: cached.results, synced: true })); } catch (e) { void e; }
+        setShowResults(true);
+        setTab("results");
+        setTimeout(function() { if (resultsRef.current) resultsRef.current.scrollIntoView({ behavior: "smooth" }); }, 200);
+        return;
+      }
+    }
+
     setRunning(true);
     setShowResults(false);
     setAgentResults({});
@@ -576,8 +513,6 @@ export default function CumminsDiagnosticSystem() {
     setApproval({ required: false, reasons: [], approved: false, approverName: "", approverChecked: false, timestamp: null });
     setRunMeta(null);
     setTab("pipeline");
-
-    var input = { engineType: engineType, faultCodes: faultCodes, symptoms: symptoms, mileage: mileage, vehicleModel: vehicleModel };
 
     // Sub-agent definitions — fn receives the accumulated results map.
     // tokenBudget is the max_tokens passed to Claude for that agent; the
@@ -621,8 +556,12 @@ export default function CumminsDiagnosticSystem() {
     });
 
     var orchResult = await orch.run(input, agentDefs);
-    startDiagnosticRun(orchResult.runId, orchResult.caseId);
+    startDiagnosticRun(orchResult.runId, orchResult.caseId, input);
     endDiagnosticRun(orchResult.runId, orchResult.aborted, orchResult.abortReason);
+
+    if (useCache && isOnline && !orchResult.aborted) {
+      setCachedResult(input, { results: orchResult.results, log: localLog });
+    }
 
     // ── Persist run record ──────────────────────────────────────────────────
     var runAt = new Date().toISOString();
@@ -635,13 +574,14 @@ export default function CumminsDiagnosticSystem() {
       mode:     runMode,
       input:    { engineType: engineType, faultCodes: faultCodes, symptoms: symptoms, mileage: mileage, vehicleModel: vehicleModel },
       log:      localLog,
+      results:  orchResult.results,
       synced:   isOnline,
     };
-    try { localStorage.setItem("cummins_run_" + orchResult.runId, JSON.stringify(runRecord)); } catch(e) {}
+    try { localStorage.setItem("cummins_run_" + orchResult.runId, JSON.stringify(runRecord)); } catch (e) { void e; }
     if (!isOnline) {
       var newQueue = pendingSync.concat([runRecord]);
       setPendingSync(newQueue);
-      try { localStorage.setItem("cummins_pending_sync", JSON.stringify(newQueue)); } catch(e) {}
+      try { localStorage.setItem("cummins_pending_sync", JSON.stringify(newQueue)); } catch (e) { void e; }
     }
 
     // Risk classification — runs after all agents complete. Uses fault-parser
@@ -653,6 +593,7 @@ export default function CumminsDiagnosticSystem() {
     );
     if (riskResult.requiresApproval) {
       setApproval(function(a) { return Object.assign({}, a, { required: true, reasons: riskResult.reasons }); });
+      updateRunApprovalStatus(orchResult.runId, "requires_approval", null, null);
     }
 
     setActiveAgent(null);
@@ -692,6 +633,7 @@ export default function CumminsDiagnosticSystem() {
     };
     logDecision(approvalEntry);
     setDecisionLog(function(l) { return l.concat([approvalEntry]); });
+    updateRunApprovalStatus(decisionLog[0]?.run_id || runMeta?.runId, "approved", name, null);
   }
 
   var statusColor = { running: "#E31837", done: "#00C853", error: "#FF1744", idle: "#444" };
@@ -810,17 +752,53 @@ export default function CumminsDiagnosticSystem() {
                 <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: "#00E676" }}>{syncMessage}</span>
               </>
             ) : null}
+            <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.3)" }} />
+            <button onClick={function() {
+              var next = appMode === "field" ? "backoffice" : "field";
+              setAppMode(next);
+              if (next === "backoffice") setTab("dashboard");
+            }} style={{ padding: "4px 10px", background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.3)", borderRadius: 4, color: "#fff", fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, cursor: "pointer" }}>
+              {appMode === "field" ? "BACK-OFFICE" : "FIELD"}
+            </button>
           </div>
+        </div>
+
+        {/* SETTINGS BAR */}
+        <div style={{ background: "#1a1a1a", borderBottom: "1px solid rgba(227,24,55,0.15)", padding: "8px 24px", display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap", fontSize: 11 }}>
+          <span style={{ color: "#666", fontFamily: "'IBM Plex Mono', monospace" }}>LLM:</span>
+          <select value={llmProvider} onChange={function(e) { setLlmProvider(e.target.value); }} style={{ background: "#0d0d0d", border: "1px solid rgba(227,24,55,0.3)", borderRadius: 4, color: "#fff", padding: "4px 8px", fontFamily: "'IBM Plex Mono', monospace" }}>
+            <option value="claude">Claude (API)</option>
+            <option value="ollama">Ollama (open-source)</option>
+          </select>
+          {llmProvider === "ollama" ? (
+            <select value={ollamaModel} onChange={function(e) { setOllamaModel(e.target.value); }} style={{ background: "#0d0d0d", border: "1px solid rgba(227,24,55,0.3)", borderRadius: 4, color: "#fff", padding: "4px 8px", fontFamily: "'IBM Plex Mono', monospace" }}>
+              <option value="mistral">mistral</option>
+              <option value="llama3.2">llama3.2</option>
+              <option value="llama3.1">llama3.1</option>
+              <option value="phi3">phi3</option>
+            </select>
+          ) : null}
+          <span style={{ color: "#666", fontFamily: "'IBM Plex Mono', monospace" }}>Tech level:</span>
+          <select value={techCompetencyLevel} onChange={function(e) { setTechCompetencyLevel(Number(e.target.value)); }} style={{ background: "#0d0d0d", border: "1px solid rgba(227,24,55,0.3)", borderRadius: 4, color: "#fff", padding: "4px 8px", fontFamily: "'IBM Plex Mono', monospace" }}>
+            <option value={1}>1 — Junior</option>
+            <option value={2}>2 — Intermediate</option>
+            <option value={3}>3 — Expert</option>
+          </select>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, color: "#aaa", cursor: "pointer" }}>
+            <input type="checkbox" checked={useCache} onChange={function(e) { setUseCache(e.target.checked); }} />
+            Cache results
+          </label>
         </div>
 
         {/* SECONDARY NAV */}
         <div style={{ background: "#161616", borderBottom: "1px solid rgba(227,24,55,0.2)", padding: "0 24px", display: "flex", alignItems: "center", gap: 0, position: "sticky", top: 48, zIndex: 199 }}>
-          {[
+          {([
+            appMode === "backoffice" ? { id: "dashboard", label: "APPROVAL QUEUE" } : null,
             { id: "input", label: "INPUT DATA" },
             { id: "pipeline", label: "AGENT PIPELINE" },
             { id: "results", label: "DIAGNOSTIC REPORT" },
             { id: "agents", label: "AGENT GUIDE" },
-          ].map(function(t) {
+          ].filter(Boolean)).map(function(t) {
             return (
               <button
                 key={t.id}
@@ -835,9 +813,60 @@ export default function CumminsDiagnosticSystem() {
 
         <div style={{ maxWidth: 1280, margin: "0 auto", padding: "28px 24px", position: "relative", zIndex: 1 }}>
 
+          {/* ── BACK-OFFICE DASHBOARD ── */}
+          {tab === "dashboard" && (
+            <div className="fade-in">
+              <div style={{ marginBottom: 24, padding: "16px 20px", background: "rgba(227,24,55,0.05)", border: "1px solid rgba(227,24,55,0.15)", borderRadius: 8 }}>
+                <div style={{ fontFamily: "'IBM Plex Sans Condensed', sans-serif", fontWeight: 700, fontSize: 15, color: "#E31837", marginBottom: 8 }}>Approval Queue</div>
+                <p style={{ fontSize: 13, color: "#aaa", lineHeight: 1.6 }}>Runs requiring human approval (safety, warranty, billing). Switch to Field mode and open a run to approve or reject.</p>
+              </div>
+              <div style={{ display: "grid", gap: 12 }}>
+                {getAllRuns(20).sort(function(a, b) {
+                  var aPending = a.approval_status === "requires_approval" ? 1 : 0;
+                  var bPending = b.approval_status === "requires_approval" ? 1 : 0;
+                  return bPending - aPending;
+                }).map(function(r) {
+                  var pending = r.approval_status === "requires_approval";
+                  return (
+                    <div key={r.id} style={{ background: pending ? "rgba(255,193,7,0.06)" : "#161616", border: "1px solid " + (pending ? "rgba(255,193,7,0.3)" : "rgba(255,255,255,0.08)"), borderRadius: 8, padding: 16, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+                      <div>
+                        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: "#4FC3F7" }}>{r.id} · {r.case_id}</div>
+                        <div style={{ fontSize: 12, color: "#888", marginTop: 4 }}>{r.started_at ? r.started_at.replace("T", " ").slice(0, 19) : ""}</div>
+                        {r.input ? (
+                          <div style={{ fontSize: 11, color: "#666", marginTop: 6 }}>{r.input.engineType} · {(r.input.faultCodes || "").slice(0, 40)}...</div>
+                        ) : null}
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        {pending ? <span style={{ padding: "4px 10px", background: "rgba(255,193,7,0.15)", border: "1px solid rgba(255,193,7,0.4)", borderRadius: 4, fontSize: 10, color: "#FFC107", fontFamily: "'IBM Plex Mono', monospace" }}>PENDING</span> : null}
+                        {r.approval_status === "rejected" ? <span style={{ padding: "4px 10px", background: "rgba(255,23,68,0.15)", border: "1px solid rgba(255,23,68,0.4)", borderRadius: 4, fontSize: 10, color: "#FF1744", fontFamily: "'IBM Plex Mono', monospace" }}>REJECTED</span> : null}
+                        {r.approval_status === "approved" ? <span style={{ padding: "4px 10px", background: "rgba(0,200,83,0.15)", border: "1px solid rgba(0,200,83,0.4)", borderRadius: 4, fontSize: 10, color: "#00C853", fontFamily: "'IBM Plex Mono', monospace" }}>APPROVED</span> : null}
+                        <button onClick={function() { loadRunForView(r); }} style={{ padding: "6px 14px", background: "#E31837", border: "none", borderRadius: 4, color: "#fff", fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", cursor: "pointer" }}>View</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {getAllRuns(20).length === 0 ? (
+                <div style={{ textAlign: "center", padding: 60, color: "#555" }}>No diagnostic runs yet. Switch to Field mode and run a pipeline.</div>
+              ) : null}
+            </div>
+          )}
+
           {/* ── INPUT TAB ── */}
           {tab === "input" && (
             <div className="fade-in">
+              <div style={{ marginBottom: 24, padding: "16px 20px", background: "rgba(227,24,55,0.05)", border: "1px solid rgba(227,24,55,0.15)", borderRadius: 8 }}>
+                <div style={{ fontFamily: "'IBM Plex Sans Condensed', sans-serif", fontWeight: 700, fontSize: 15, color: "#E31837", marginBottom: 12, letterSpacing: 0.5 }}>Input Data</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 24px", fontSize: 12, color: "#aaa", lineHeight: 1.6 }}>
+                  <span>• <strong>Engine chips</strong> — Match codes to platform</span>
+                  <span>• <strong>Vehicle #</strong> — Unit ID for audit</span>
+                  <span>• <strong>Odometer/hours</strong> — Affects wear-related causes</span>
+                  <span>• <strong>SPN/FMI codes</strong> — Raw codes from INSITE</span>
+                  <span>• <strong>Symptoms</strong> — Improve confidence</span>
+                  <span>• <strong>Presets</strong> — Quick demo or common case</span>
+                  <span>• <strong>Launch</strong> — Start 6-agent pipeline</span>
+                </div>
+              </div>
               {/* Engine selector chips */}
               <div style={{ marginBottom: 24, padding: "14px 18px", background: "rgba(227,24,55,0.05)", border: "1px solid rgba(227,24,55,0.15)", borderRadius: 8 }}>
                 <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: "#E31837", letterSpacing: 2, marginBottom: 10 }}>SUPPORTED CUMMINS PLATFORMS</div>
@@ -915,6 +944,17 @@ export default function CumminsDiagnosticSystem() {
           {/* ── PIPELINE TAB ── */}
           {tab === "pipeline" && (
             <div className="fade-in">
+              <div style={{ marginBottom: 24, padding: "16px 20px", background: "rgba(227,24,55,0.05)", border: "1px solid rgba(227,24,55,0.15)", borderRadius: 8 }}>
+                <div style={{ fontFamily: "'IBM Plex Sans Condensed', sans-serif", fontWeight: 700, fontSize: 15, color: "#E31837", marginBottom: 12, letterSpacing: 0.5 }}>Agent Pipeline</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 24px", fontSize: 12, color: "#aaa", lineHeight: 1.6 }}>
+                  <span>• <strong>FaultParser</strong> — Validates codes, assigns severity</span>
+                  <span>• <strong>Diagnostic</strong> — Root causes + confidence</span>
+                  <span>• <strong>Troubleshoot</strong> — Step-by-step procedures</span>
+                  <span>• <strong>Parts</strong> — OEM/Recon part numbers</span>
+                  <span>• <strong>Warehouse</strong> — Stock, pricing, distance</span>
+                  <span>• <strong>Alternative</strong> — Fallbacks when out of stock</span>
+                </div>
+              </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 12 }}>
                 {AGENTS.map(function(agent) {
                   var status = agentStatus[agent.id] || "idle";
@@ -969,13 +1009,27 @@ export default function CumminsDiagnosticSystem() {
           {/* ── RESULTS TAB ── */}
           {tab === "results" && (
             <div className="fade-in" ref={resultsRef}>
+              <div style={{ marginBottom: 24, padding: "16px 20px", background: "rgba(227,24,55,0.05)", border: "1px solid rgba(227,24,55,0.15)", borderRadius: 8 }}>
+                <div style={{ fontFamily: "'IBM Plex Sans Condensed', sans-serif", fontWeight: 700, fontSize: 15, color: "#E31837", marginBottom: 12, letterSpacing: 0.5 }}>Diagnostic Report</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 24px", fontSize: 12, color: "#aaa", lineHeight: 1.6 }}>
+                  <span>• <strong>Run ID</strong> — Traceability & audit</span>
+                  <span>• <strong>Escalations</strong> — Rules that fired</span>
+                  <span>• <strong>Parsed codes</strong> — Validated input</span>
+                  <span>• <strong>Root causes</strong> — Prioritize faults</span>
+                  <span>• <strong>Approval gate</strong> — Sign-off for high-risk</span>
+                  <span>• <strong>Procedures</strong> — Steps, tools, safety</span>
+                  <span>• <strong>Parts & warehouse</strong> — Order & pickup</span>
+                  <span>• <strong>Alternatives</strong> — When out of stock</span>
+                  <span>• <strong>Decision log</strong> — Export for compliance</span>
+                </div>
+              </div>
               {!showResults ? (
                 <div style={{ textAlign: "center", padding: 80, color: "#555" }}>
                   <div style={{ fontFamily: "'IBM Plex Sans Condensed', sans-serif", fontSize: 20, marginBottom: 8, color: "#444" }}>NO DIAGNOSTIC DATA</div>
                   <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: "#333" }}>Go to Input Data tab and launch the pipeline to generate a report</div>
                 </div>
               ) : (
-                <div>
+                <div id="diagnostic-report-print">
 
                   {/* RUN IDENTITY PANEL */}
                   {runMeta ? (
@@ -1079,13 +1133,16 @@ export default function CumminsDiagnosticSystem() {
                       <SectionHeader color="#C41230">② Diagnostic Agent — Root Cause Analysis</SectionHeader>
                       <Card>
                         <p style={{ color: "#aaa", fontSize: 14, marginBottom: 16, lineHeight: 1.65, fontStyle: "italic" }}>{agentResults["diagnostic"].summary}</p>
-                        {(agentResults["diagnostic"].details || []).map(function(d, i) {
+                        {(sortByQuickWin(agentResults["diagnostic"].details || [])).map(function(d, i) {
                           var sv = severityStyle[d.severity] || severityStyle["medium"];
+                          var quickWin = isQuickWin(d);
                           return (
                             <div key={i} style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 8, padding: 16, marginBottom: 12 }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+                                {quickWin ? <span style={{ padding: "2px 8px", background: "rgba(0,200,83,0.15)", border: "1px solid rgba(0,200,83,0.4)", borderRadius: 4, fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: "#00C853" }}>TRY FIRST</span> : null}
                                 <span style={{ padding: "3px 12px", background: sv.bg, border: "1px solid " + sv.border, borderRadius: 4, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: sv.color }}>{d.code}</span>
                                 <span style={{ fontFamily: "'IBM Plex Sans', sans-serif", fontWeight: 600, fontSize: 15 }}>{d.issue}</span>
+                                {d.estimatedTime ? <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: "#4FC3F7", background: "rgba(79,195,247,0.1)", padding: "2px 8px", borderRadius: 4 }}>~{d.estimatedTime}</span> : null}
                                 {d.confidence ? <span style={{ marginLeft: "auto", fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: "#666", background: "rgba(255,255,255,0.04)", padding: "2px 8px", borderRadius: 4 }}>CONFIDENCE: {d.confidence}</span> : null}
                                 {d.severity ? <span style={{ padding: "2px 8px", background: sv.bg, borderRadius: 4, fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: sv.color }}>{(d.severity || "").toUpperCase()}</span> : null}
                               </div>
@@ -1176,13 +1233,23 @@ export default function CumminsDiagnosticSystem() {
                                 I have reviewed the diagnostic findings and risk classifications above. I authorize the recommended repair procedures, parts procurement, and associated labour and parts costs for this vehicle/engine.
                               </label>
                             </div>
-                            <button
-                              disabled={!approval.approverName.trim() || !approval.approverChecked}
-                              onClick={handleApprove}
-                              style={{ padding: "14px", background: (!approval.approverName.trim() || !approval.approverChecked) ? "rgba(255,193,7,0.08)" : "#FFC107", border: "1px solid rgba(255,193,7,0.4)", borderRadius: 8, color: (!approval.approverName.trim() || !approval.approverChecked) ? "#555" : "#000", fontFamily: "'IBM Plex Mono', monospace", fontWeight: 500, fontSize: 13, letterSpacing: 2, cursor: (!approval.approverName.trim() || !approval.approverChecked) ? "not-allowed" : "pointer", transition: "all 0.2s" }}
-                            >
-                              {(!approval.approverName.trim() || !approval.approverChecked) ? "ENTER APPROVER NAME AND CHECK ACKNOWLEDGMENT TO UNLOCK" : "✓  APPROVE & UNLOCK REPAIR ACTIONS"}
-                            </button>
+                            <div>
+                              <label style={{ display: "block", fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: "#888", letterSpacing: 2, marginBottom: 6 }}>REJECTION REASON (if rejecting)</label>
+                              <input value={rejectionReason} onChange={function(e) { setRejectionReason(e.target.value); }} placeholder="e.g. Need additional INSITE snapshot before proceeding"
+                                style={{ width: "100%", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 6, padding: "10px 14px", color: "#f0f0f0", fontFamily: "'IBM Plex Sans', sans-serif", fontSize: 13, marginBottom: 12 }} />
+                            </div>
+                            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                              <button
+                                disabled={!approval.approverName.trim() || !approval.approverChecked}
+                                onClick={handleApprove}
+                                style={{ flex: 1, minWidth: 200, padding: "14px", background: (!approval.approverName.trim() || !approval.approverChecked) ? "rgba(255,193,7,0.08)" : "#FFC107", border: "1px solid rgba(255,193,7,0.4)", borderRadius: 8, color: (!approval.approverName.trim() || !approval.approverChecked) ? "#555" : "#000", fontFamily: "'IBM Plex Mono', monospace", fontWeight: 500, fontSize: 13, letterSpacing: 2, cursor: (!approval.approverName.trim() || !approval.approverChecked) ? "not-allowed" : "pointer", transition: "all 0.2s" }}
+                              >
+                                ✓  APPROVE & UNLOCK
+                              </button>
+                              <button disabled={!rejectionReason.trim()} onClick={handleReject} style={{ padding: "14px 20px", background: !rejectionReason.trim() ? "rgba(255,23,68,0.08)" : "rgba(255,23,68,0.15)", border: "1px solid rgba(255,23,68,0.4)", borderRadius: 8, color: !rejectionReason.trim() ? "#555" : "#FF1744", fontFamily: "'IBM Plex Mono', monospace", fontWeight: 500, fontSize: 13, cursor: !rejectionReason.trim() ? "not-allowed" : "pointer" }}>
+                                ✗  REJECT
+                              </button>
+                            </div>
                           </div>
                         </div>
                       ) : null}
@@ -1195,9 +1262,9 @@ export default function CumminsDiagnosticSystem() {
                   <div style={{ position: "relative", minHeight: approval.required && !approval.approved ? 240 : "auto" }}>
                     {approval.required && !approval.approved ? (
                       <div style={{ position: "absolute", inset: 0, zIndex: 10, background: "rgba(13,13,13,0.92)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10, borderRadius: 6, pointerEvents: "all" }}>
-                        <div style={{ fontSize: 38 }}>🔒</div>
-                        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: "#FFC107", letterSpacing: 2 }}>REPAIR ACTIONS LOCKED</div>
-                        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: "#444" }}>Complete the approval gate above to unlock</div>
+                        <div style={{ fontSize: 38 }}>{approval.rejected ? "✗" : "🔒"}</div>
+                        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: approval.rejected ? "#FF1744" : "#FFC107", letterSpacing: 2 }}>{approval.rejected ? "REJECTED — REPAIR ACTIONS BLOCKED" : "REPAIR ACTIONS LOCKED"}</div>
+                        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: "#444", textAlign: "center", maxWidth: 400 }}>{approval.rejected && approval.rejectionReason ? approval.rejectionReason : "Complete the approval gate above to unlock"}</div>
                       </div>
                     ) : null}
 
@@ -1206,13 +1273,29 @@ export default function CumminsDiagnosticSystem() {
                     <div>
                       <SectionHeader color="#FF6B35">③ Troubleshoot Agent — INSITE-Guided Repair Procedures</SectionHeader>
                       {(agentResults["troubleshoot"].procedures || []).map(function(proc, i) {
+                        var reqLevel = getCompetencyLevel(proc.code);
+                        var askSenior = techCompetencyLevel < reqLevel;
+                        var diagDetail = (agentResults["diagnostic"]?.details || []).find(function(d) { return d.code === proc.code; });
+                        var severity = diagDetail?.severity || "medium";
+                        var safetyChecklist = getSafetyChecklistForCode(proc.code, severity);
                         return (
                           <Card key={i}>
                             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
                               <span style={{ padding: "3px 12px", background: "rgba(255,107,53,0.12)", border: "1px solid rgba(255,107,53,0.35)", borderRadius: 4, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: "#FF6B35" }}>{proc.code}</span>
                               <span style={{ fontFamily: "'IBM Plex Sans', sans-serif", fontWeight: 600, fontSize: 15 }}>{proc.title || "Repair Procedure"}</span>
+                              <span style={{ padding: "2px 8px", background: "rgba(79,195,247,0.1)", border: "1px solid rgba(79,195,247,0.3)", borderRadius: 3, fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: "#4FC3F7" }}>LEVEL {reqLevel}</span>
+                              {askSenior ? <span style={{ padding: "2px 8px", background: "rgba(255,193,7,0.15)", border: "1px solid rgba(255,193,7,0.4)", borderRadius: 3, fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: "#FFC107" }}>ASK SENIOR</span> : null}
+                              {proc.estimatedTime ? <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: "#888" }}>~{proc.estimatedTime}</span> : null}
                               {proc.qsolRef ? <span style={{ marginLeft: "auto", fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: "#666" }}>QSOL: {proc.qsolRef}</span> : null}
                             </div>
+                            {safetyChecklist.length > 0 ? (
+                              <div style={{ background: "rgba(255,193,7,0.06)", border: "1px solid rgba(255,193,7,0.2)", borderRadius: 6, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: "#FFC107" }}>
+                                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, letterSpacing: 2, marginBottom: 6 }}>SAFETY CHECKLIST — COMPLETE BEFORE STARTING</div>
+                                <ul style={{ margin: 0, paddingLeft: 18 }}>
+                                  {safetyChecklist.map(function(item, j) { return <li key={j} style={{ marginBottom: 4 }}>{item}</li>; })}
+                                </ul>
+                              </div>
+                            ) : null}
                             {proc.safetyNote ? (
                               <div style={{ background: "rgba(255,193,7,0.07)", border: "1px solid rgba(255,193,7,0.25)", borderRadius: 6, padding: "10px 14px", marginBottom: 14, fontSize: 12, color: "#FFC107", lineHeight: 1.5 }}>
                                 <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: 1 }}>⚠ SAFETY — </span>{proc.safetyNote}
@@ -1372,11 +1455,11 @@ export default function CumminsDiagnosticSystem() {
                           <div style={{ width: 3, height: 20, background: "#4FC3F7", borderRadius: 2 }} />
                           <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#4FC3F7", fontSize: 11, letterSpacing: 3, textTransform: "uppercase" }}>⑦ Decision Log — Agent Execution Audit Trail</span>
                         </div>
-                        <button
-                          onClick={exportDecisionLog}
-                          style={{ padding: "6px 16px", background: "rgba(79,195,247,0.08)", border: "1px solid rgba(79,195,247,0.3)", borderRadius: 5, color: "#4FC3F7", fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: 2, cursor: "pointer" }}
-                        >
+                        <button onClick={exportDecisionLog} style={{ padding: "6px 16px", background: "rgba(79,195,247,0.08)", border: "1px solid rgba(79,195,247,0.3)", borderRadius: 5, color: "#4FC3F7", fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: 2, cursor: "pointer" }}>
                           ⬇ EXPORT JSON
+                        </button>
+                        <button onClick={exportReportPDF} style={{ padding: "6px 16px", background: "rgba(79,195,247,0.08)", border: "1px solid rgba(79,195,247,0.3)", borderRadius: 5, color: "#4FC3F7", fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: 2, cursor: "pointer" }}>
+                          📄 PRINT / PDF
                         </button>
                       </div>
                       <Card>

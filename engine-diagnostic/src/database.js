@@ -12,7 +12,7 @@ function loadRuns() {
 }
 
 function saveRuns(runs) {
-  try { localStorage.setItem(DB_RUNS_KEY, JSON.stringify(runs)); } catch(e) {}
+  try { localStorage.setItem(DB_RUNS_KEY, JSON.stringify(runs)); } catch (e) { void e; }
 }
 
 function loadLogs() {
@@ -20,7 +20,7 @@ function loadLogs() {
 }
 
 function saveLogs(logs) {
-  try { localStorage.setItem(DB_LOGS_KEY, JSON.stringify(logs)); } catch(e) {}
+  try { localStorage.setItem(DB_LOGS_KEY, JSON.stringify(logs)); } catch (e) { void e; }
 }
 
 /**
@@ -41,7 +41,7 @@ export function initializeDatabase() {
 /**
  * Start a new diagnostic run
  */
-export function startDiagnosticRun(runId, caseId) {
+export function startDiagnosticRun(runId, caseId, input) {
   try {
     const runs = loadRuns();
     runs.unshift({
@@ -52,6 +52,10 @@ export function startDiagnosticRun(runId, caseId) {
       aborted: 0,
       abort_reason: null,
       created_at: new Date().toISOString(),
+      status: 'completed',
+      approval_status: 'pending',
+      approval_rejection_reason: null,
+      input: input || null,
     });
     saveRuns(runs);
     console.log(`Started diagnostic run: ${runId}`);
@@ -197,6 +201,39 @@ export function exportAllLogs() {
   } catch(err) {
     console.error('Error exporting logs:', err);
     return null;
+  }
+}
+
+/**
+ * Update run approval status (for audit trail)
+ */
+export function updateRunApprovalStatus(runId, status, approverId, rejectionReason) {
+  try {
+    const runs = loadRuns();
+    const idx = runs.findIndex(r => r.id === runId);
+    if (idx !== -1) {
+      runs[idx].approval_status = status;
+      runs[idx].approver_id = approverId || null;
+      runs[idx].approval_timestamp = new Date().toISOString();
+      runs[idx].approval_rejection_reason = rejectionReason || null;
+      saveRuns(runs);
+    }
+    return true;
+  } catch (err) {
+    console.error('Error updating approval:', err);
+    return false;
+  }
+}
+
+/**
+ * Get runs pending approval (for back-office dashboard)
+ */
+export function getRunsPendingApproval() {
+  try {
+    return loadRuns().filter(r => r.approval_status === 'requires_approval');
+  } catch (e) {
+    void e;
+    return [];
   }
 }
 

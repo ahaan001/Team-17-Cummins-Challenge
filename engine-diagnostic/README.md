@@ -140,6 +140,52 @@ The button is disabled until both fields are completed. Once clicked:
 - The approval gate header turns green showing the approver's name and UTC timestamp.
 - A **HUMAN APPROVAL** row is written to the Decision Log with `model_name: human:<name>` and `confidence: APPROVED`.
 
+### Rejecting a run
+
+To reject a diagnostic run (e.g. if more data is needed), enter a **Rejection Reason** (required) and click **REJECT**. The run status is updated in the audit trail and the repair actions remain locked.
+
+---
+
+## Settings bar
+
+A settings bar below the header lets you configure:
+
+| Setting | Options | Purpose |
+|---------|---------|---------|
+| **LLM** | Claude (API) / Ollama (open-source) | Choose AI backend; Ollama uses local models (Mistral, Llama, Phi) |
+| **Tech level** | 1 Junior / 2 Intermediate / 3 Expert | Drives "ASK SENIOR" cues and competency badges on procedures |
+| **Cache results** | On/Off | Caches diagnostic results for identical inputs (1hr TTL) to speed repeat runs |
+
+---
+
+## Field vs back-office mode
+
+Toggle **FIELD** / **BACK-OFFICE** in the header to switch views.
+
+- **Field mode** — Full diagnostic workflow (Input → Pipeline → Report).
+- **Back-office mode** — Adds an **APPROVAL QUEUE** tab showing runs (pending approval first). Click **View** to load a run and approve or reject it. Supports case handoff from field to back-office for human oversight.
+
+---
+
+## Junior tech safety
+
+Procedures show **LEVEL** badges (1–3) and **ASK SENIOR** when the fault requires a higher competency than the selected tech level. A **SAFETY CHECKLIST** appears for high-risk procedures (fuel system depressurisation, DPF regen, emissions) — complete each item before starting work.
+
+---
+
+## Speed resolution
+
+- **TRY FIRST** — Diagnostic details are sorted by "quick win" score; connector/filter fixes appear first.
+- **~Estimated time** — Shows repair time per fault and per procedure.
+- **Cache** — Identical inputs return cached results instantly (online only).
+
+---
+
+## Export and audit
+
+- **EXPORT JSON** — Downloads the decision log as JSON for compliance.
+- **PRINT / PDF** — Opens a print dialog; use "Save as PDF" for report export.
+
 ---
 
 ## Orchestrator and agent architecture
@@ -177,6 +223,10 @@ engine-diagnostic/
 │   ├── App.jsx            # Main React component and all UI
 │   ├── Orchestrator.js    # Main agent — coordinates sub-agents, budgets, decision log
 │   ├── RiskClassifier.js  # Risk classification for the human approval gate
+│   ├── llmProvider.js     # Configurable LLM backend (Claude API, Ollama)
+│   ├── competencyHelper.js # Competency levels, safety checklists, ask-senior cues
+│   ├── resultCache.js    # Caches results for identical inputs
+│   ├── quickWinHelper.js # Ranks faults by likely quick fix
 │   ├── main.jsx           # React entry point
 │   └── index.css          # Global styles
 ├── index.html
@@ -187,9 +237,22 @@ engine-diagnostic/
 
 ---
 
+## Ollama (open-source LLM)
+
+To use Ollama instead of Claude, select **Ollama (open-source)** in the settings bar. Install [Ollama](https://ollama.com) and run:
+
+```bash
+ollama serve
+ollama pull mistral
+```
+
+Set `VITE_OLLAMA_URL` in `.env` if Ollama runs on a different host (default: `http://localhost:11434`).
+
+---
+
 ## Model and licence notes
 
-- **AI model:** `claude-sonnet-4-20250514` (Anthropic Claude Sonnet). The model ID is set in `Orchestrator.js` and `App.jsx`. To switch models, update the `model` field in the Orchestrator config and the `callClaude` function in `App.jsx`.
+- **AI model:** Claude Sonnet (Anthropic) or Mistral/Llama/Phi via Ollama. Select in the settings bar.
 - **Direct browser API calls:** This project uses `anthropic-dangerous-direct-browser-access: true` to call the Anthropic API directly from the browser. This header exists specifically for local/demo tools. **Do not deploy this publicly** without moving the API call to a server-side proxy.
 - **Synthetic data:** All warehouse locations, part numbers, prices, and stock levels are fabricated for demonstration purposes and do not represent real Cummins inventory.
 - **Not a Cummins product:** This tool is an independent demonstration project and is not affiliated with, endorsed by, or supported by Cummins Inc.
